@@ -1,8 +1,8 @@
 import socket
-from .utils import set_ttl,find_second_last_dot
-from .log import logger
-from . import remote
-from .config import config
+from utils import set_ttl, find_second_last_dot
+from log import logger
+from config import config
+import remote
 import time
 import threading
 
@@ -13,6 +13,7 @@ logger = logger.getChild("fake_desync")
 
 try:
     import platform
+
     system = platform.system()
     if system == "Windows":
 
@@ -179,6 +180,7 @@ def send_fake_data(
     data_len, fake_data, fake_ttl, real_data, default_ttl, sock, FAKE_sleep
 ):
     import platform
+
     system = platform.system()
     logger.info(system)
     if system == "Windows":
@@ -283,7 +285,7 @@ def send_fake_data(
                         kernel32.GetLastError(),
                         ws2_32.WSAGetLastError(),
                     )
-                    
+
                 return True
             except:
                 raise Exception(
@@ -293,6 +295,7 @@ def send_fake_data(
                 kernel32.CloseHandle(file_handle)
                 kernel32.CloseHandle(ov.hEvent)
                 import os
+
                 os.remove(file_path)
         except Exception as e:
             raise e
@@ -362,11 +365,11 @@ def send_data_with_fake(sock: remote.Remote, data):
         raise Exception("Failed to send fake data.")
 
     data = data[data_len:]
-    sni=sock.sni
-    if sni==None:
+    sni = sock.sni
+    if sni == None:
         sock.send(data)
         return
-    
+
     position = data.find(sni)
     logger.debug(f"{sni} {position}")
     if position == -1:
@@ -375,23 +378,23 @@ def send_data_with_fake(sock: remote.Remote, data):
     sni_len = len(sni)
 
     sock.send(data[0:position])
-    data=data[position:]
+    data = data[position:]
 
     if sock.policy.get("len_tcp_sni") >= sni_len:
-        sock.policy["len_tcp_sni"]=sni_len/2
-        logger.info("len_tcp_sni too big, set to %d",sock.policy.get("len_tcp_sni"))
-    
-    sld=find_second_last_dot(sni)
-    
-    if sock.policy.get("len_tcp_sni")<=sld:
-        sock.policy["len_tcp_sni"]=sld+2
-        logger.info("len_tcp_sni too small, set to %d",sock.policy.get("len_tcp_sni"))
+        sock.policy["len_tcp_sni"] = sni_len / 2
+        logger.info("len_tcp_sni too big, set to %d", sock.policy.get("len_tcp_sni"))
+
+    sld = find_second_last_dot(sni)
+
+    if sock.policy.get("len_tcp_sni") <= sld:
+        sock.policy["len_tcp_sni"] = sld + 2
+        logger.info("len_tcp_sni too small, set to %d", sock.policy.get("len_tcp_sni"))
 
     if send_fake_data(
         sock.policy.get("len_tcp_sni"),
         fake_data,
         fake_ttl,
-        sni[0:sock.policy.get("len_tcp_sni")],
+        sni[0 : sock.policy.get("len_tcp_sni")],
         default_ttl,
         sock.sock,
         FAKE_sleep,
@@ -400,6 +403,6 @@ def send_data_with_fake(sock: remote.Remote, data):
     else:
         raise Exception("Failed to send fake SNI.")
 
-    data=data[sock.policy.get("len_tcp_sni"):]
-    
+    data = data[sock.policy.get("len_tcp_sni") :]
+
     sock.send(data)

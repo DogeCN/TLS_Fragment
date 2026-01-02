@@ -1,9 +1,5 @@
-"""
-site
-"""
-
-from .log import logger
-from .config import (
+from log import logger
+from config import (
     domain_map,
     config,
     default_policy,
@@ -13,15 +9,15 @@ from .config import (
     TTL_cache,
     write_DNS_cache,
     write_TTL_cache,
-    ip_to_binary_prefix
+    ip_to_binary_prefix,
 )
 
-from .dns_extension import MyDoh
+from dns_extension import MyDoh
 import socket
 import threading
 import time
 import copy
-from . import utils
+import utils
 
 logger = logger.getChild("remote")
 
@@ -45,14 +41,14 @@ cnt_upd_DNS_cache = 0
 lock_DNS_cache = threading.Lock()
 
 
-def match_ip(ip:str):
+def match_ip(ip: str):
     if ":" in ip:
         return copy.deepcopy(ipv6_map.search(utils.ip_to_binary_prefix(ip)))
     else:
         return copy.deepcopy(ipv4_map.search(utils.ip_to_binary_prefix(ip)))
 
 
-def match_domain(domain:str):
+def match_domain(domain: str):
     matched_domains = domain_map.search("^" + domain + "$")
     if matched_domains:
         return copy.deepcopy(
@@ -60,16 +56,16 @@ def match_domain(domain:str):
         )
     else:
         return {}
-    
-def get_policy(address:str) -> dict:
+
+
+def get_policy(address: str) -> dict:
     if utils.is_ip_address(address):
         return match_ip(address)
     else:
         return match_domain(address)
-    
 
-    
-def route(address:str,policy:dict,tmp_DNS_cache:dict={}) -> {str,dict}:
+
+def route(address: str, policy: dict, tmp_DNS_cache: dict = {}) -> {str, dict}:
     policy = {**policy, **get_policy(address)}
     # print(policy)
     """
@@ -87,10 +83,10 @@ def route(address:str,policy:dict,tmp_DNS_cache:dict={}) -> {str,dict}:
     else:
         stopchain = False
     if not utils.is_ip_address(address) and redirectm == address:
-        policy["route"]=default_policy["route"]
-        return route(address,policy,tmp_DNS_cache)
-        
-    if not utils.is_ip_address(address) and redirectm[1:]==".dns.resolve":
+        policy["route"] = default_policy["route"]
+        return route(address, policy, tmp_DNS_cache)
+
+    if not utils.is_ip_address(address) and redirectm[1:] == ".dns.resolve":
         """
         示例dns返回
         {
@@ -114,19 +110,23 @@ def route(address:str,policy:dict,tmp_DNS_cache:dict={}) -> {str,dict}:
         else:
             if redirectm == "6.dns.resolve":
                 try:
-                    tmp_DNS_cache= {**tmp_DNS_cache,**resolver.resolve(address, "AAAA")}
+                    tmp_DNS_cache = {
+                        **tmp_DNS_cache,
+                        **resolver.resolve(address, "AAAA"),
+                    }
                     ansaddress = tmp_DNS_cache[address]["route"]
                 except:
-                    tmp_DNS_cache= {**tmp_DNS_cache,**resolver.resolve(address, "A")}
+                    tmp_DNS_cache = {**tmp_DNS_cache, **resolver.resolve(address, "A")}
                     ansaddress = tmp_DNS_cache[address]["route"]
             else:
                 try:
-                    tmp_DNS_cache= {**tmp_DNS_cache,**resolver.resolve(address, "A")}
+                    tmp_DNS_cache = {**tmp_DNS_cache, **resolver.resolve(address, "A")}
                     ansaddress = tmp_DNS_cache[address]["route"]
                 except:
-                    import traceback
-                    traceback.print_exc()
-                    tmp_DNS_cache= {**tmp_DNS_cache,**resolver.resolve(address, "AAAA")}
+                    tmp_DNS_cache = {
+                        **tmp_DNS_cache,
+                        **resolver.resolve(address, "AAAA"),
+                    }
                     ansaddress = tmp_DNS_cache[address]["route"]
 
             if ansaddress and policy["DNS_cache"]:
@@ -136,33 +136,32 @@ def route(address:str,policy:dict,tmp_DNS_cache:dict={}) -> {str,dict}:
                     tmp_DNS_cache[address]["expires"] = time.time() + ttl
                 DNS_cache[address] = tmp_DNS_cache[address]
                 cnt_upd_DNS_cache += 1
-                print(cnt_upd_DNS_cache)
                 if cnt_upd_DNS_cache >= config["DNS_cache_update_interval"]:
                     cnt_upd_DNS_cache = 0
                     write_DNS_cache()
                 lock_DNS_cache.release()
                 logger.info(f"DNS cache {address} as {tmp_DNS_cache[address]}")
 
-        if type(ansaddress)==list:
+        if type(ansaddress) == list:
             # 是list必然是ip
             # 我们暂时取第一个，之后可能加入优选
-            ansaddress=ansaddress[0]
+            ansaddress = ansaddress[0]
     else:
         if utils.is_ip_address(address):
             if redirectm[1:] == ".dns.resolve":
-                return address,policy
+                return address, policy
         try:
             ip_to_binary_prefix(redirectm)
             ansaddress = utils.calc_redirect_ip(address, redirectm)
         except:
             ansaddress = redirectm
         if stopchain:
-            return ansaddress,policy
+            return ansaddress, policy
 
     if ansaddress == address:
-        return address,policy
+        return address, policy
     logger.info(f"route {address} to {ansaddress}")
-    return route(ansaddress,policy,tmp_DNS_cache)
+    return route(ansaddress, policy, tmp_DNS_cache)
 
 
 class Remote:
@@ -177,7 +176,7 @@ class Remote:
     def __init__(self, domain: str, port=443, protocol=6):
         self.domain = domain
         self.protocol = protocol
-        
+
         self.policy = copy.deepcopy(default_policy)
         self.policy.setdefault("port", port)
         self.address, self.policy = route(self.domain, self.policy)
@@ -233,13 +232,12 @@ class Remote:
             self.sock.connect((self.address, self.port))
         elif self.protocol == 17:
             pass
-          
+
     def send_with_oob(self, data, oob):
         if self.protocol == 17:
             self.sock.sendall(data)
         elif self.protocol == 6:
-            print("OOB ",data,oob)
-            self.sock.send(data+oob,socket.MSG_OOB)
+            self.sock.send(data + oob, socket.MSG_OOB)
             # self.sock.sendall(data)
 
     def send(self, data):

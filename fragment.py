@@ -1,14 +1,11 @@
-"""
-tls data fragment.
-"""
-
 import random
-from .log import logger
-from . import remote
+from log import logger
+import remote
 import time
 
 
 logger = logger.getChild("fragment")
+
 
 def fragment_content(data: str, num: int) -> list:
     """
@@ -27,7 +24,7 @@ def fragment_content(data: str, num: int) -> list:
     dividing_points.append(data_length)
     dividing_points.sort()
     for i in range(len(dividing_points) - 1):
-        fragmented_content.append(data[dividing_points[i]:dividing_points[i + 1]])
+        fragmented_content.append(data[dividing_points[i] : dividing_points[i + 1]])
     return fragmented_content
 
 
@@ -62,15 +59,16 @@ def fragment_pattern(data, pattern, len_sni: int, num_pieces: int):
 
     for i in range(num):
         fragmented_data.append(
-            data[position + i * len_sni:position + (i + 1) * len_sni]
+            data[position + i * len_sni : position + (i + 1) * len_sni]
         )
 
     r = len(fragmented_data)
 
     fragmented_data.extend(
-        fragment_content(data[position + num * len_sni:], num_pieces)
+        fragment_content(data[position + num * len_sni :], num_pieces)
     )
     return fragmented_data, l, r
+
 
 def send_fraggmed_tls_data(sock: remote.Remote, data):
     """send fragged tls data"""
@@ -103,7 +101,7 @@ def send_fraggmed_tls_data(sock: remote.Remote, data):
     logger.debug(f"TLS fraged: {tcp_data}")
 
     lenl = 0
-    for i in range(0,l):
+    for i in range(0, l):
         lenl += len(fragmented_tls_data[i])
     lenr = lenl
     for i in range(l, r):
@@ -115,13 +113,15 @@ def send_fraggmed_tls_data(sock: remote.Remote, data):
         sock.policy["len_tcp_sni"],
         sock.policy["num_tcp_pieces"],
     )
-    
-    obboffset=sock.policy.get("oob_offset")
 
-    for i in range(0,len(fragmented_tcp_data)):
-        packet=fragmented_tcp_data[i]
-        if sock.policy.get("oob_str") and i==l+obboffset:
-                sock.send_with_oob(packet,bytes(sock.policy["oob_str"][0],encoding="utf-8"))
+    obboffset = sock.policy.get("oob_offset")
+
+    for i in range(0, len(fragmented_tcp_data)):
+        packet = fragmented_tcp_data[i]
+        if sock.policy.get("oob_str") and i == l + obboffset:
+            sock.send_with_oob(
+                packet, bytes(sock.policy["oob_str"][0], encoding="utf-8")
+            )
         else:
             sock.send(packet)
         logger.debug(

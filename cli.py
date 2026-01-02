@@ -1,12 +1,10 @@
-from .log import logger
+from log import logger
 from pathlib import Path
-import socket
-import threading
-import time
-from . import remote, fake_desync, fragment, utils
-from .config import config
-from .remote import match_domain
-from .pac import generate_pac, load_pac
+import remote, fake_desync, fragment, utils
+import socket, threading, time
+from config import config
+from remote import match_domain
+from pac import generate_pac, load_pac
 
 datapath = Path()
 
@@ -14,6 +12,7 @@ pacfile = "function genshin(){}"
 
 ThreadtoWork = False
 proxy_thread = None
+
 
 class ThreadedServer(object):
     def __init__(self, host, port):
@@ -23,7 +22,7 @@ class ThreadedServer(object):
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.host, self.port))
 
-    def listen(self,block=True):
+    def listen(self, block=True):
         global ThreadtoWork, proxy_thread
         self.sock.listen(
             128
@@ -92,15 +91,15 @@ class ThreadedServer(object):
 
             # 请求解析阶段
             header = client_socket.recv(3)
-            while header[0]!=0x05:
-                logger.debug("right 1, %s",str(header))
-                header=header[1:]+client_socket.recv(1)
-            logger.debug("socks5 header: %s",header)
+            while header[0] != 0x05:
+                logger.debug("right 1, %s", str(header))
+                header = header[1:] + client_socket.recv(1)
+            logger.debug("socks5 header: %s", header)
             if len(header) != 3 or header[0] != 0x05:
                 raise ValueError("Invalid SOCKS5 header")
 
             _, cmd, _ = header
-            
+
             if cmd not in {0x01, 0x05}:  # 只支持CONNECT和UDP（over TCP）命令
                 client_socket.sendall(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")
                 client_socket.close()
@@ -108,16 +107,16 @@ class ThreadedServer(object):
 
             # 目标地址解析（复用原有DNS逻辑）
             server_name, server_port = utils.parse_socks5_address(client_socket)
-            
-            logger.info("%s:%d",server_name,server_port)
+
+            logger.info("%s:%d", server_name, server_port)
 
             # 建立连接（完全复用原有逻辑）
             try:
-                if cmd==0x01:
+                if cmd == 0x01:
                     remote_obj = remote.Remote(server_name, server_port, 6)
-                elif cmd==0x05:
+                elif cmd == 0x05:
                     remote_obj = remote.Remote(server_name, server_port, 17)
-                    
+
                 client_socket.sendall(
                     b"\x05\x00\x00\x01" + socket.inet_aton("0.0.0.0") + b"\x00\x00"
                 )
@@ -164,8 +163,10 @@ class ThreadedServer(object):
             return None
 
         # 原有HTTP重定向逻辑
-        elif data.startswith((b'GET ', b'PUT ', b'DELETE ', b'POST ', b'HEAD ', b'OPTIONS ')):
-            response = utils.generate_302(data,"github.com")
+        elif data.startswith(
+            (b"GET ", b"PUT ", b"DELETE ", b"POST ", b"HEAD ", b"OPTIONS ")
+        ):
+            response = utils.generate_302(data, "github.com")
             client_socket.sendall(response.encode(encoding="UTF-8"))
             client_socket.close()
             return None
@@ -177,7 +178,7 @@ class ThreadedServer(object):
                 b"HTTP/1.1 400 Bad Request\r\nProxy-agent: MyProxy/1.0\r\n\r\n"
             )
             client_socket.close()
-            return None  
+            return None
 
     def my_upstream(self, client_sock):
         first_flag = True
@@ -185,7 +186,7 @@ class ThreadedServer(object):
         if backend_sock == None:
             client_sock.close()
             return
-            
+
         global ThreadtoWork
         while ThreadtoWork:
             try:
@@ -199,12 +200,24 @@ class ThreadedServer(object):
 
                     try:
                         extractedsni = utils.extract_sni(data)
-                        if backend_sock.domain=="127.0.0.114" or backend_sock.domain=="::114" or (config["BySNIfirst"] and str(extractedsni,encoding="ASCII") != backend_sock.domain):
-                            port, protocol=backend_sock.port,backend_sock.protocol
-                            logger.info(f"replace backendsock: {extractedsni} {port} {protocol}")
-                            new_backend_sock=remote.Remote(str(extractedsni,encoding="ASCII"),port,protocol)
-                            backend_sock=new_backend_sock
-                    except: 
+                        if (
+                            backend_sock.domain == "127.0.0.114"
+                            or backend_sock.domain == "::114"
+                            or (
+                                config["BySNIfirst"]
+                                and str(extractedsni, encoding="ASCII")
+                                != backend_sock.domain
+                            )
+                        ):
+                            port, protocol = backend_sock.port, backend_sock.protocol
+                            logger.info(
+                                f"replace backendsock: {extractedsni} {port} {protocol}"
+                            )
+                            new_backend_sock = remote.Remote(
+                                str(extractedsni, encoding="ASCII"), port, protocol
+                            )
+                            backend_sock = new_backend_sock
+                    except:
                         pass
 
                     backend_sock.client_sock = client_sock
@@ -213,16 +226,19 @@ class ThreadedServer(object):
                         backend_sock.connect()
                     except:
                         raise Exception("backend connect fail")
-                    
 
-                    if backend_sock.policy.get("safety_check") is True and data.startswith((b'GET ', b'PUT ', b'DELETE ', b'POST ', b'HEAD ', b'OPTIONS ')):
+                    if backend_sock.policy.get(
+                        "safety_check"
+                    ) is True and data.startswith(
+                        (b"GET ", b"PUT ", b"DELETE ", b"POST ", b"HEAD ", b"OPTIONS ")
+                    ):
                         logger.warning("HTTP protocol detected, will redirect to https")
                         # 如果是http协议，重定向到https，要从data中提取url
-                        response = utils.generate_302(data,extractedsni)
+                        response = utils.generate_302(data, extractedsni)
                         client_sock.sendall(response.encode())
                         client_sock.close()
                         backend_sock.close()
-                        
+
                     if data:
                         thread_down = threading.Thread(
                             target=self.my_downstream,
@@ -234,15 +250,18 @@ class ThreadedServer(object):
 
                     try:
                         backend_sock.sni = extractedsni
-                        if str(backend_sock.sni)!=str(backend_sock.domain):
-                            backend_sock.policy = {**backend_sock.policy, **match_domain(str(backend_sock.sni))}
+                        if str(backend_sock.sni) != str(backend_sock.domain):
+                            backend_sock.policy = {
+                                **backend_sock.policy,
+                                **match_domain(str(backend_sock.sni)),
+                            }
                     except:
                         backend_sock.send(data)
                         continue
 
                     if backend_sock.policy.get("safety_check") is True:
                         try:
-                            can_pass=utils.detect_tls_version_by_keyshare(data)
+                            can_pass = utils.detect_tls_version_by_keyshare(data)
                         except:
                             pass
                         if can_pass != 1:
@@ -256,11 +275,11 @@ class ThreadedServer(object):
                             raise ValueError("Not a TLS 1.3 connection")
 
                     if data:
-                        mode = backend_sock.policy.get('mode')
+                        mode = backend_sock.policy.get("mode")
                         if mode == "TLSfrag":
                             fragment.send_fraggmed_tls_data(backend_sock, data)
                         elif mode == "FAKEdesync":
-                            fake_desync.send_data_with_fake(backend_sock,data)
+                            fake_desync.send_data_with_fake(backend_sock, data)
                         elif mode == "DIRECT":
                             backend_sock.send(data)
                         elif mode == "GFWlike":
@@ -298,7 +317,7 @@ class ThreadedServer(object):
             try:
                 if first_flag is True:
                     first_flag = False
-                    data = backend_sock.recv(16384)          
+                    data = backend_sock.recv(16384)
                     if data:
                         client_sock.sendall(data)
                     else:
@@ -346,15 +365,17 @@ class ThreadedServer(object):
 
 serverHandle = None
 
+
 def start_server(block=True):
     try:
-      generate_pac()
+        generate_pac()
     except:
-      pass
-    
+        pass
+
     global serverHandle
     logger.info(f"Now listening at: 127.0.0.1:{config['port']}")
     serverHandle = ThreadedServer("", config["port"]).listen(block)
+
 
 def stop_server(wait_for_stop=True):
     global ThreadtoWork, proxy_thread

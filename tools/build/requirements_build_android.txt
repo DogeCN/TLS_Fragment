@@ -1,2 +1,0 @@
-cython==0.29.33
-git+https://github.com/kivy/buildozer.git@master

@@ -1,5 +1,6 @@
 {
     "loglevel": "INFO",
+    "logfile": "latest.log",
     "port": 2500,
     "DOH_port": 2500,
     "my_socket_timeout": 120,
@@ -73,7 +74,7 @@
     },
     "domains": {
         "lapi.photomath.net": {
-          "route": "216.239.32.21"
+            "route": "216.239.32.21"
         },
         "pximg.net": {
             "route": "104.21.3.221"

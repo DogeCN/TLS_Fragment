@@ -1,7 +1,8 @@
-from .log import logger
-from .config import config
+from log import logger
+from config import config
 
 logger = logger.getChild("pac")
+
 
 def generate_pac():
     pacfile = """class TrieNode {
@@ -117,17 +118,17 @@ function MatchAutomatom(str) {
 let domains="""
 
     with open("config_pac.json") as f:
-        pacfile+=f.read()
-    pacfile += ';\n'
-    
-    proxy_url='"'
-    if config["pac_proxy"]=="HTTP":
-        proxy_url+=f"PROXY 127.0.0.1:{config['port']}"
-    elif config["pac_proxy"]=="SOCKS5":
-        proxy_url+=f"SOCKS5 127.0.0.1:{config['port']}"
+        pacfile += f.read()
+    pacfile += ";\n"
+
+    proxy_url = '"'
+    if config["pac_proxy"] == "HTTP":
+        proxy_url += f"PROXY 127.0.0.1:{config['port']}"
+    elif config["pac_proxy"] == "SOCKS5":
+        proxy_url += f"SOCKS5 127.0.0.1:{config['port']}"
     else:
         raise ValueError("Invalid pac_proxy value")
-    proxy_url+='";'
+    proxy_url += '";'
 
     pacfile += "BuildAutomatom(domains);\n"
     pacfile += """function FindProxyForURL(url, host) {
@@ -139,7 +140,7 @@ let domains="""
         pacfile += proxy_url
     else:
         raise ValueError("Invalid pac_target value")
-    
+
     pacfile += """
     else
         return """
@@ -149,10 +150,11 @@ let domains="""
         pacfile += proxy_url
     else:
         raise ValueError("Invalid pac_default value")
-    pacfile += '\n}'
+    pacfile += "\n}"
 
     with open("PAC_cache.pac", "w") as f:
         f.write(pacfile)
+
 
 def load_pac():
     with open("PAC_cache.pac", "r") as f:
