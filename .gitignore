@@ -1,3 +1,7 @@
 DNS_cache.json
 latest.log
 __pycache__
+build
+dist
+main.spec
+build.bat
