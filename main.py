@@ -50,8 +50,8 @@ class ProxyApp(App):
         self.config_file_button = Button(
             text="config", size_hint_y=None, height=button_height
         )
-        self.config_pac_file_button = Button(
-            text="PAC config", size_hint_y=None, height=button_height
+        self.config_extra_file_button = Button(
+            text="extra config", size_hint_y=None, height=button_height
         )
         self.DNS_cache_file_button = Button(
             text="DNS cache", size_hint_y=None, height=button_height
@@ -60,11 +60,11 @@ class ProxyApp(App):
             text="TTL cache", size_hint_y=None, height=button_height
         )
         self.config_file_button.bind(on_press=self.edit_config)
-        self.config_pac_file_button.bind(on_press=self.edit_config_pac)
+        self.config_extra_file_button.bind(on_press=self.edit_config_extra)
         self.DNS_cache_file_button.bind(on_press=self.edit_DNS_cache)
         self.TTL_cache_file_button.bind(on_press=self.edit_TTL_cache)
         self.file_list_box_sub1.add_widget(self.config_file_button)
-        self.file_list_box_sub1.add_widget(self.config_pac_file_button)
+        self.file_list_box_sub1.add_widget(self.config_extra_file_button)
         self.file_list_box_sub2.add_widget(self.DNS_cache_file_button)
         self.file_list_box_sub2.add_widget(self.TTL_cache_file_button)
         self.file_list_box.add_widget(self.file_list_box_sub1)
@@ -110,7 +110,7 @@ class ProxyApp(App):
                 response = requests.get(url+self.show_in_edit)
                 if response.status_code == 200:
                     config_data = json.loads(response.text)
-                    with open("config.json", "w") as f:
+                    with open(self.show_in_edit, "w") as f:
                         json.dump(config_data, f, indent=4)
                     succeeded = True
                     self.load_file()
@@ -128,7 +128,7 @@ class ProxyApp(App):
                     response = requests.get(url+self.show_in_edit, proxies=proxy)
                     if response.status_code == 200:
                         config_data = json.loads(response.text)
-                        with open("config.json", "w") as f:
+                        with open(self.show_in_edit, "w") as f:
                             json.dump(config_data, f, indent=4)
                         succeeded = True
                         self.load_file()
@@ -168,8 +168,8 @@ class ProxyApp(App):
         self.show_in_edit = "config.json"
         self.load_file()
     
-    def edit_config_pac(self, instance):
-        self.show_in_edit = "config_pac.json"
+    def edit_config_extra(self, instance):
+        self.show_in_edit = "config_extra.json"
         self.load_file()
 
     def edit_DNS_cache(self, instance):
@@ -181,10 +181,10 @@ class ProxyApp(App):
         self.load_file()
 
     def on_start(self):
-        self.get_permit()
-        self.load_file()
         try:
             self.request_battery_optimization()
+            self.get_permit()
+            self.load_file()
         except:
             pass
         if self.is_service_running():
@@ -277,24 +277,24 @@ class ProxyApp(App):
         popup.open()
 
     def start_proxy_service(self):
-        """Start the Android service to run the proxy."""
         from android import mActivity
+        from android.permissions import Permission
+
+        SDK_INT = autoclass('android.os.Build$VERSION').SDK_INT
+        
+        if SDK_INT >= 33:
+            self.get_permit([Permission.POST_NOTIFICATIONS])
 
         context = mActivity.getApplicationContext()
         SERVICE_NAME = str(context.getPackageName()) + ".ServiceProxyservice"
-
-        self.service_target = autoclass(SERVICE_NAME)
-        self.service_target.start(
+        service = autoclass(SERVICE_NAME)
+        service.start(
             mActivity,
-            "icon",
+            "notification_icon",   # ← 与 android.add_resources 中的文件名一致（不含 .png）
             "TlsFragment",
-            "TlsFragment Proxy Foreground Service Running",
-            "",
+            "Proxy is running",
+            ""             # kivy 会自动创建，传了也没用
         )
-        while not self.is_service_running():
-            pass
-        self.show_popup("Start successfully", "Proxy started successfully")
-        return self.service_target
 
     def stop_proxy_service(self):
         from android import mActivity
@@ -351,7 +351,7 @@ class ProxyApp(App):
         else:
             print("battery optimization turnned of")
 
-    def get_permit(self):
+    def get_permit(self, g_per=None):
         from android.permissions import Permission, request_permissions
 
         def callback(permissions, results):
@@ -371,12 +371,15 @@ class ProxyApp(App):
                     "Lack of permissions",
                     "Please grant all permissions to use this app",
                 )
-
-        requested_permissions = [
-            Permission.INTERNET,
-            Permission.FOREGROUND_SERVICE,
-            Permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-        ]
+        if g_per:
+            requested_permissions = g_per
+        else:
+            requested_permissions = [
+                Permission.INTERNET,
+                Permission.FOREGROUND_SERVICE,
+                Permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            ]
+        
         request_permissions(requested_permissions, callback)
 
     def run_proxy_service(self, instance, change=True):

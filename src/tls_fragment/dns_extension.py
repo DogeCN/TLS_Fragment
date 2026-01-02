@@ -1,58 +1,86 @@
 import requests
-import dns.message   
+import dns.message
 import dns.rdatatype
+import dns.query
 import base64
+import time
+from urllib.parse import urlparse
 
 from .log import logger
 logger = logger.getChild('dns_extension')
 
 
 class MyDoh:
-    def __init__(self,proxy,url):
-        self.url = url
-        self.req = requests.session()              
-        self.knocker_proxy = {
-        'https': proxy
-        }
-        
+    def __init__(self, proxy, url):
+        parsed = urlparse(url)
+        if parsed.scheme == 'https':
+            self.mode = 'doh'
+            self.url = url  # as-is
+            self.req = requests.Session()
+            # EXACTLY as original: {'https': proxy}
+            self.knocker_proxy = {'https': proxy}
+        elif parsed.scheme == 'udp':
+            self.mode = 'udp'
+            self.udp_host = parsed.hostname
+            self.udp_port = parsed.port or 53
+            self.req = None
+            self.knocker_proxy = None
+        else:
+            raise ValueError(f"Unsupported scheme: {parsed.scheme}")
 
-
-    def resolve(self,server_name,dns_type):   
-        query_params = {
-            # 'name': server_name,    # no need for this when using dns wire-format , cause 400 err on some server
-            'type': dns_type,
-            'ct': 'application/dns-message',
-            }
-
-        logger.info(f"online DNS Query {server_name}")       
+    def resolve(self, server_name, dns_type):
+        logger.info(f"Online DNS Query {server_name} via {self.mode.upper()}")
         try:
-            query_message = dns.message.make_query(server_name,dns_type)
-            query_wire = query_message.to_wire()
-            query_base64 = base64.urlsafe_b64encode(query_wire).decode('utf-8')
-            query_base64 = query_base64.replace('=','')    # remove base64 padding to append in url            
+            query_message = dns.message.make_query(server_name, dns_type)
 
-            query_url = self.url + query_base64
+            if self.mode == 'doh':
+                query_wire = query_message.to_wire()
+                query_base64 = base64.urlsafe_b64encode(query_wire).decode().rstrip('=')
+                query_url = self.url + query_base64
 
-            # print(query_url,query_params)
+                ans = self.req.get(
+                    query_url,
+                    params={'type': dns_type, 'ct': 'application/dns-message'},
+                    headers={'accept': 'application/dns-message'},
+                    proxies=self.knocker_proxy  # <-- {'https': proxy}, as original
+                )
 
-            ans = self.req.get( query_url , params=query_params , headers={'accept': 'application/dns-message'} , proxies=self.knocker_proxy)
-            # print(ans)
+                if ans.status_code == 200 and ans.headers.get('content-type') == 'application/dns-message':
+                    answer_msg = dns.message.from_wire(ans.content)
+                else:
+                    logger.error(f"DoH error: {ans.status_code} {ans.reason}")
+                    raise Exception("DoH query failed")
+
+            else:  # udp
+                answer_msg = dns.query.udp(query_message, self.udp_host, port=self.udp_port, timeout=5)
+
+            result,current_time = {},time.time() 
+    
+            for rrset in answer_msg.answer:
+                domain = rrset.name.to_text()
+                if domain[-1]=='.':
+                    domain=domain[:-1]
+                ttl = rrset.ttl
+                expires = current_time + ttl
+                
+                if rrset.rdtype == dns.rdatatype.CNAME:
+                    target = rrset[0].target.to_text()
+                    if target[-1]=='.':
+                        target=target[:-1]
+                elif rrset.rdtype == dns.rdatatype.A:
+                    target = [record.address for record in rrset]
+                elif rrset.rdtype == dns.rdatatype.AAAA:
+                    target = [record.address for record in rrset]
+
+                result[domain] = {
+                    "route": target,
+                    "expires": expires
+                }
+
+            # print(answer_msg,result)
+            logger.info(f"DNS query result: {result}")
             
-            # Parse the response as a DNS packet
-
-            if ans.status_code == 200 and ans.headers.get('content-type') == 'application/dns-message':
-                answer_msg = dns.message.from_wire(ans.content)
-  
-                resolved_ip = None
-                for x in answer_msg.answer:
-                    if (dns_type=="AAAA" and x.rdtype == dns.rdatatype.AAAA) or (dns_type=="A" and x.rdtype == dns.rdatatype.A):
-                        resolved_ip = x[0].address    # pick first ip in DNS answer
-                        break
-
-                logger.info(f"online DNS --> Resolved {server_name} to {resolved_ip}")
-                return resolved_ip
-            logger.error(f"online DNS --> Error DNS query: {ans.status_code} {ans.reason}")
+            return result
         except Exception as e:
-            logger.error(f"online DNS --> Error DNS query: {repr(e)}")
-        raise Exception("online DNS --> Error DNS query")
-
+            logger.error(f"DNS query error: {repr(e)}")
+            raise Exception("DNS query failed")
