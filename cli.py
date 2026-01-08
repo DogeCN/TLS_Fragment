@@ -37,7 +37,7 @@ class ThreadedServer(object):
                     time.sleep(1)  # 主线程的其他操作
             except KeyboardInterrupt:
                 # 捕获 Ctrl+C
-                logger.warning("\nServer shutting down.")
+                logger.warning("Server shutting down.")
             finally:
                 ThreadtoWork = False
                 self.sock.close()
@@ -213,12 +213,14 @@ class ThreadedServer(object):
                             logger.info(
                                 f"replace backendsock: {extractedsni} {port} {protocol}"
                             )
-                            new_backend_sock = remote.Remote(
+                            old_backend_sock = backend_sock
+                            backend_sock = remote.Remote(
                                 str(extractedsni, encoding="ASCII"), port, protocol
                             )
-                            backend_sock = new_backend_sock
-                    except:
-                        pass
+                            if old_backend_sock:
+                                old_backend_sock.close()
+                    except Exception as e:
+                        logger.warning(f"SNI extraction failed: {e}")
 
                     backend_sock.client_sock = client_sock
 
@@ -238,15 +240,7 @@ class ThreadedServer(object):
                         client_sock.sendall(response.encode())
                         client_sock.close()
                         backend_sock.close()
-
-                    if data:
-                        thread_down = threading.Thread(
-                            target=self.my_downstream,
-                            args=(backend_sock, client_sock),
-                        )
-                        thread_down.daemon = True
-                        thread_down.start()
-                        # backend_sock.sendall(data)
+                        return
 
                     try:
                         backend_sock.sni = extractedsni
@@ -255,26 +249,34 @@ class ThreadedServer(object):
                                 **backend_sock.policy,
                                 **match_domain(str(backend_sock.sni)),
                             }
-                    except:
-                        backend_sock.send(data)
-                        continue
+                    except Exception as e:
+                        logger.warning(f"SNI processing failed: {e}")
 
                     if backend_sock.policy.get("safety_check") is True:
                         try:
                             can_pass = utils.detect_tls_version_by_keyshare(data)
-                        except:
-                            pass
-                        if can_pass != 1:
-                            logger.warning("Not a TLS 1.3 connection and will close")
-                            try:
-                                client_sock.send(utils.generate_tls_alert(data))
-                            except:
-                                pass
-                            backend_sock.close()
-                            client_sock.close()
-                            raise ValueError("Not a TLS 1.3 connection")
+                            if can_pass != 1:
+                                logger.warning(
+                                    "Not a TLS 1.3 connection and will close"
+                                )
+                                try:
+                                    client_sock.send(utils.generate_tls_alert(data))
+                                except:
+                                    pass
+                                backend_sock.close()
+                                client_sock.close()
+                                return
+                        except Exception as e:
+                            logger.warning(f"TLS version check failed: {e}")
 
                     if data:
+                        thread_down = threading.Thread(
+                            target=self.my_downstream,
+                            args=(backend_sock, client_sock),
+                        )
+                        thread_down.daemon = True
+                        thread_down.start()
+
                         mode = backend_sock.policy.get("mode")
                         if mode == "TLSfrag":
                             fragment.send_fraggmed_tls_data(backend_sock, data)
@@ -285,8 +287,7 @@ class ThreadedServer(object):
                         elif mode == "GFWlike":
                             backend_sock.close()
                             client_sock.close()
-                            return False
-
+                            return
                     else:
                         raise Exception("cli syn close")
 
