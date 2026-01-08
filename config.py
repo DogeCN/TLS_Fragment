@@ -86,8 +86,6 @@ def ip_to_binary_prefix(ip_or_network: str):
             )
 
 
-basepath = Path(__file__).parent.parent.parent
-
 config = {}
 
 
@@ -125,29 +123,16 @@ class Trie:
         return ans
 
 
-if not Path("config.json").exists():
-    shutil.copyfile(basepath / "config.json", "config.json")
 with open("config.json", "rb") as f:
     _config = json.load(f)
 
-
 config = merge_dict(_config, config)
-
-
-if Path("config_extra.json").exists():
-    with open("config_extra.json", "rb") as f:
-        extra_config = json.load(f)
-else:
-    extra_config = {}
 
 default_policy = config["default_policy"]
 default_policy["fake_packet"] = default_policy["fake_packet"].encode(encoding="UTF-8")
 
 config["domains"] = expand_policies(config["domains"])
 config["IPs"] = expand_policies(config["IPs"])
-extra_config["domains"] = expand_policies(extra_config.get("domains", {}))
-extra_config["IPs"] = expand_policies(extra_config.get("IPs", {}))
-config = merge_dict(extra_config, config)
 
 domain_map = ahocorasick.AhoCorasick(*config["domains"].keys())
 ipv4_map = Trie()
