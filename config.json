@@ -332,8 +332,5 @@
         "bilibili.com": {
             "mode": "DIRECT"
         }
-    },
-    "pac_proxy": "HTTP",
-    "pac_default": "PROXY",
-    "pac_target": "DIRECT"
+    }
 }
