@@ -6,9 +6,7 @@ from config import (
     ipv4_map,
     ipv6_map,
     DNS_cache,
-    TTL_cache,
     write_DNS_cache,
-    write_TTL_cache,
     ip_to_binary_prefix,
 )
 
@@ -22,10 +20,28 @@ import utils
 logger = logger.getChild("remote")
 
 resolver = MyDoh(
-    proxy=f"http://127.0.0.1:{config['DOH_port']}", url=config["doh_server"]
+    proxy=f"http://127.0.0.1:{config['DOH_port']}", urls=config["doh_servers"]
 )
-cnt_upd_TTL_cache = 0
-lock_TTL_cache = threading.Lock()
+
+# DNS优选
+if config.get("dns_optimization", True):
+    resolver.optimize_servers()
+    
+    # 定期重新优选
+    def periodic_optimization():
+        import threading
+        def optimize_task():
+            while True:
+                time.sleep(300)  # 每5分钟重新优选一次
+                try:
+                    resolver.optimize_servers()
+                except Exception as e:
+                    logger.warning(f"DNS optimization failed: {e}")
+        
+        thread = threading.Thread(target=optimize_task, daemon=True)
+        thread.start()
+    
+    periodic_optimization()
 
 t = time.time()
 temp_DNS_cache = DNS_cache.copy()
@@ -188,23 +204,11 @@ class Remote:
 
         if self.policy["fake_ttl"][0] == "q" and self.policy["mode"] == "FAKEdesync":
             logger.info(f"FAKE TTL for {self.address} is {self.policy.get('fake_ttl')}")
-            if TTL_cache.get(self.address) != None:
-                val = TTL_cache[self.address]
-                logger.info("dist for %s is %d, found in cache", self.address, val)
-            else:
-                val = utils.get_ttl(self.address, self.policy.get("port"))
-                if val == -1:
-                    raise Exception("ERROR get ttl")
-                if self.policy["TTL_cache"]:
-                    global cnt_upd_TTL_cache, lock_TTL_cache
-                    lock_TTL_cache.acquire()
-                    TTL_cache[self.address] = val
-                    cnt_upd_TTL_cache += 1
-                    if cnt_upd_TTL_cache >= config["TTL_cache_update_interval"]:
-                        cnt_upd_TTL_cache = 0
-                        write_TTL_cache()
-                    lock_TTL_cache.release()
-                logger.info("dist for %s is %d", self.address, val)
+            val = utils.get_ttl(self.address, self.policy.get("port"))
+            if val == -1:
+                logger.warning(f"Failed to get TTL for {self.address}, using default")
+                val = 10
+            logger.info("dist for %s is %d", self.address, val)
             self.policy["fake_ttl"] = utils.fake_ttl_mapping(
                 self.policy["fake_ttl"], val
             )

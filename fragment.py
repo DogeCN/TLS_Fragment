@@ -70,8 +70,8 @@ def fragment_pattern(data, pattern, len_sni: int, num_pieces: int):
     return fragmented_data, l, r
 
 
-def send_fraggmed_tls_data(sock: remote.Remote, data):
-    """send fragged tls data"""
+def send_fraggmented_tls_data(sock: remote.Remote, data):
+    """send fragmented tls data"""
     sni = sock.sni
 
     logger.info("To send: %d Bytes.", len(data))
@@ -133,4 +133,4 @@ def send_fraggmed_tls_data(sock: remote.Remote, data):
 
         time.sleep(sock.policy["send_interval"])
 
-    logger.info(f"----------finish------------ {sni}")
+    logger.info("Fragmented TLS data of %s sent." % str(sni))

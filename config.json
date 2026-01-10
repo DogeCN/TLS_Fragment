@@ -5,12 +5,18 @@
     "DOH_port": 2500,
     "my_socket_timeout": 120,
     "FAKE_ttl_auto_timeout": 5,
-    "doh_server": "https://v.recipes/dns-query?dns=",
+    "doh_servers": [
+        "https://v.recipes/dns-query?dns=",
+        "https://cloudflare-dns.com/dns-query?dns=",
+        "https://dns.google/dns-query?dns=",
+        "https://1.1.1.1/dns-query?dns="
+    ],
+    "dns_optimization": true,
     "DNS_cache_update_interval": 2,
-    "TTL_cache_update_interval": 2,
     "UDPfakeDNS": true,
     "BySNIfirst": false,
     "TransmitFile_Limit": 2,
+    "max_workers": 100,
     "redirect_when_route": false,
     "default_policy": {
         "mode": "TLSfrag",
@@ -331,6 +337,11 @@
         },
         "bilibili.com": {
             "mode": "DIRECT"
+        },
+        "test-ttl.example.com": {
+            "mode": "FAKEdesync",
+            "fake_ttl": "q0-1;3=3;5-1;8-2;13-3;20=18",
+            "route": "8.8.8.8"
         }
     }
 }

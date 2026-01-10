@@ -1,95 +1,40 @@
 from log import logger
 import remote, fake_desync, fragment, utils
-import socket, threading, time
+import socket, time
 from config import config
 from remote import match_domain
-import json
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
-# 直连缓存
-direct_cache = set()
-cache_file = Path("direct_cache.json")
-
-def load_direct_cache():
-    global direct_cache
-    try:
-        if cache_file.exists():
-            with open(cache_file, 'r') as f:
-                data = json.load(f)
-                direct_cache = set(data.get('domains', []))
-    except:
-        direct_cache = set()
-
-def save_direct_cache():
-    try:
-        with open(cache_file, 'w') as f:
-            json.dump({'domains': list(direct_cache)}, f)
-    except:
-        pass
-
-def add_direct_domain(domain):
-    direct_cache.add(domain)
-    save_direct_cache()
-
-def is_direct_cached(domain):
-    return domain in direct_cache
-
-ThreadtoWork = False
-proxy_thread = None
+thread_pool = ThreadPoolExecutor(max_workers=config.get("max_workers", 100))
 
 
-class ThreadedServer(object):
+class Server:
     def __init__(self, host, port):
         self.host = host
         self.port = port
+        self.running = False
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.host, self.port))
 
-    def listen(self, block=True):
-        global ThreadtoWork, proxy_thread
+    def listen(self):
         self.sock.listen(128)
+        self.running = True
 
-        proxy_thread = threading.Thread(target=self.accept_connections, args=())
-        proxy_thread.start()
-        if block:
-            try:
-                while True:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                logger.warning("Server shutting down.")
-            finally:
-                ThreadtoWork = False
-                self.sock.close()
-        else:
-            return self
-
-    def accept_connections(self):
-        global ThreadtoWork
-        while ThreadtoWork:
-            try:
-                client_sock, _ = self.sock.accept()
-                client_sock.settimeout(config["my_socket_timeout"])
-
-                time.sleep(0.01)
-                thread_up = threading.Thread(
-                    target=self.my_upstream, args=(client_sock,)
-                )
-                thread_up.daemon = True
-                thread_up.start()
-            except OSError as e:
-                if ThreadtoWork:
-                    logger.warning(f"Accept error: {repr(e)}")
-                break
-            except Exception as e:
-                if ThreadtoWork:
-                    logger.warning(f"Server error: {repr(e)}")
-                break
-        
         try:
+            while self.running:
+                try:
+                    client_sock, _ = self.sock.accept()
+                    client_sock.settimeout(config["my_socket_timeout"])
+                    thread_pool.submit(self.upstream, client_sock)
+                except OSError:
+                    if self.running:
+                        break
+        except KeyboardInterrupt:
+            logger.warning("Server shutting down.")
+        finally:
+            self.running = False
             self.sock.close()
-        except:
-            pass
 
     def handle_client_request(self, client_socket):
         try:
@@ -117,9 +62,8 @@ class ThreadedServer(object):
 
             header = client_socket.recv(3)
             while header[0] != 0x05:
-                logger.debug("right 1, %s", str(header))
                 header = header[1:] + client_socket.recv(1)
-            logger.debug("socks5 header: %s", header)
+
             if len(header) != 3 or header[0] != 0x05:
                 raise ValueError("Invalid SOCKS5 header")
 
@@ -131,27 +75,21 @@ class ThreadedServer(object):
                 raise ValueError(f"Not supported socks command, {cmd}")
 
             server_name, server_port = utils.parse_socks5_address(client_socket)
-
             logger.info("%s:%d", server_name, server_port)
 
-            try:
-                if cmd == 0x01:
-                    remote_obj = remote.Remote(server_name, server_port, 6)
-                elif cmd == 0x05:
-                    remote_obj = remote.Remote(server_name, server_port, 17)
+            if cmd == 0x01:
+                remote_obj = remote.Remote(server_name, server_port, 6)
+            elif cmd == 0x05:
+                remote_obj = remote.Remote(server_name, server_port, 17)
 
-                client_socket.sendall(
-                    b"\x05\x00\x00\x01" + socket.inet_aton("0.0.0.0") + b"\x00\x00"
-                )
-                return remote_obj
-            except Exception as e:
-                logger.info(f"连接失败: {repr(e)}")
-                client_socket.sendall(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
-                client_socket.close()
-                return server_name if utils.is_ip_address(server_name) else None
+            client_socket.sendall(
+                b"\x05\x00\x00\x01" + socket.inet_aton("0.0.0.0") + b"\x00\x00"
+            )
+            return remote_obj
 
         except Exception as e:
             logger.info(f"SOCKS5处理错误: {repr(e)}")
+            client_socket.sendall(b"\x05\x04\x00\x01\x00\x00\x00\x00\x00\x00")
             client_socket.close()
             return None
 
@@ -174,7 +112,7 @@ class ThreadedServer(object):
                     b"HTTP/1.1 502 Bad Gateway\r\nProxy-agent : MyProxy/1.0\r\n\r\n"
                 )
                 client_socket.close()
-                return server_name if utils.is_ip_address(server_name) else None
+                return None
 
         elif data.startswith(
             (b"GET ", b"PUT ", b"DELETE ", b"POST ", b"HEAD ", b"OPTIONS ")
@@ -192,163 +130,89 @@ class ThreadedServer(object):
             client_socket.close()
             return None
 
-    def my_upstream(self, client_sock):
-        first_flag = True
+    def upstream(self, client_sock):
         backend_sock = None
         try:
             backend_sock = self.handle_client_request(client_sock)
-            if backend_sock == None:
+            if not backend_sock:
                 return
 
-            global ThreadtoWork
-            while ThreadtoWork:
+            time.sleep(0.1)
+            data = client_sock.recv(16384)
+            if not data:
+                return
+
+            # SNI处理
+            try:
+                sni = utils.extract_sni(data)
+                if backend_sock.domain in ("127.0.0.114", "::114") or (
+                    config["BySNIfirst"]
+                    and str(sni, encoding="ASCII") != backend_sock.domain
+                ):
+                    old_backend_sock = backend_sock
+                    backend_sock = remote.Remote(
+                        str(sni, encoding="ASCII"),
+                        backend_sock.port,
+                        backend_sock.protocol,
+                    )
+                    old_backend_sock.close()
+            except Exception as e:
+                logger.warning(f"SNI extraction failed: {e}")
+                sni = None
+
+            backend_sock.client_sock = client_sock
+            backend_sock.connect()
+
+            # 安全检查
+            if backend_sock.policy.get("safety_check") and data.startswith(
+                (b"GET ", b"PUT ", b"DELETE ", b"POST ", b"HEAD ", b"OPTIONS ")
+            ):
+                response = utils.generate_302(data, sni or backend_sock.domain)
+                client_sock.sendall(response.encode())
+                return
+
+            # SNI策略更新
+            if sni and str(sni) != str(backend_sock.domain):
+                backend_sock.sni = sni
+                backend_sock.policy.update(match_domain(str(sni)))
+
+            # TLS版本检查
+            if backend_sock.policy.get("safety_check"):
                 try:
-                    if first_flag is True:
-                        first_flag = False
-
-                        time.sleep(0.1)
-                        data = client_sock.recv(16384)
-                        if not data:
-                            break
-
-                        try:
-                            extractedsni = utils.extract_sni(data)
-                            if (
-                                backend_sock.domain == "127.0.0.114"
-                                or backend_sock.domain == "::114"
-                                or (
-                                    config["BySNIfirst"]
-                                    and str(extractedsni, encoding="ASCII")
-                                    != backend_sock.domain
-                                )
-                            ):
-                                port, protocol = backend_sock.port, backend_sock.protocol
-                                logger.info(
-                                    f"replace backendsock: {extractedsni} {port} {protocol}"
-                                )
-                                old_backend_sock = backend_sock
-                                backend_sock = remote.Remote(
-                                    str(extractedsni, encoding="ASCII"), port, protocol
-                                )
-                                if old_backend_sock:
-                                    old_backend_sock.close()
-                        except Exception as e:
-                            logger.warning(f"SNI extraction failed: {e}")
-
-                        backend_sock.client_sock = client_sock
-
-                        # 检查是否为缓存的直连域名
-                        if is_direct_cached(backend_sock.domain):
-                            logger.info(f"Using cached direct connection for {backend_sock.domain}")
-                            try:
-                                direct_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                                direct_sock.settimeout(10)
-                                direct_sock.connect((backend_sock.domain, backend_sock.port))
-                                backend_sock.sock = direct_sock
-                                backend_sock.policy = {"mode": "DIRECT"}
-                            except Exception:
-                                logger.warning(f"Cached direct connection failed for {backend_sock.domain}, trying proxy")
-                                try:
-                                    backend_sock.connect()
-                                except Exception:
-                                    break
-                        else:
-                            # 先尝试代理连接
-                            try:
-                                backend_sock.connect()
-                            except Exception as proxy_error:
-                                # 代理失败，尝试直连
-                                logger.info(f"Proxy failed for {backend_sock.domain}, trying direct connection")
-                                try:
-                                    direct_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                                    direct_sock.settimeout(10)
-                                    direct_sock.connect((backend_sock.domain, backend_sock.port))
-                                    
-                                    # 直连成功，缓存域名
-                                    add_direct_domain(backend_sock.domain)
-                                    logger.info(f"Direct connection successful, cached {backend_sock.domain}")
-                                    
-                                    # 替换backend_sock为直连套接字
-                                    backend_sock.sock = direct_sock
-                                    backend_sock.policy = {"mode": "DIRECT"}
-                                except Exception as direct_error:
-                                    logger.error(f"Both proxy and direct failed for {backend_sock.domain}")
-                                    break
-
-                        if backend_sock.policy.get(
-                            "safety_check"
-                        ) is True and data.startswith(
-                            (b"GET ", b"PUT ", b"DELETE ", b"POST ", b"HEAD ", b"OPTIONS ")
-                        ):
-                            logger.warning("HTTP protocol detected, will redirect to https")
-                            response = utils.generate_302(data, extractedsni)
-                            client_sock.sendall(response.encode())
-                            break
-
-                        try:
-                            backend_sock.sni = extractedsni
-                            if str(backend_sock.sni) != str(backend_sock.domain):
-                                backend_sock.policy = {
-                                    **backend_sock.policy,
-                                    **match_domain(str(backend_sock.sni)),
-                                }
-                        except Exception as e:
-                            logger.warning(f"SNI processing failed: {e}")
-
-                        if backend_sock.policy.get("safety_check") is True:
-                            try:
-                                can_pass = utils.detect_tls_version_by_keyshare(data)
-                                if can_pass != 1:
-                                    logger.warning(
-                                        "Not a TLS 1.3 connection and will close"
-                                    )
-                                    try:
-                                        client_sock.send(utils.generate_tls_alert(data))
-                                    except:
-                                        pass
-                                    break
-                            except Exception as e:
-                                logger.warning(f"TLS version check failed: {e}")
-
-                        if data:
-                            thread_down = threading.Thread(
-                                target=self.my_downstream,
-                                args=(backend_sock, client_sock),
-                            )
-                            thread_down.daemon = True
-                            thread_down.start()
-
-                            mode = backend_sock.policy.get("mode")
-                            if mode == "TLSfrag":
-                                fragment.send_fraggmed_tls_data(backend_sock, data)
-                            elif mode == "FAKEdesync":
-                                fake_desync.send_data_with_fake(backend_sock, data)
-                            elif mode == "DIRECT":
-                                backend_sock.send(data)
-                            elif mode == "GFWlike":
-                                break
-
-                    else:
-                        data = client_sock.recv(16384)
-                        if data:
-                            backend_sock.send(data)
-                        else:
-                            break
-
-                except (ConnectionResetError, ConnectionAbortedError, OSError) as e:
-                    if e.errno in (10038, 10053, 10054):
-                        logger.debug(f"Connection closed: {e}")
-                    else:
-                        logger.info(f"upstream : {repr(e)} from {backend_sock.domain if backend_sock else 'unknown'}")
-                    break
+                    if utils.detect_tls_version_by_keyshare(data) != 1:
+                        logger.warning("Not a TLS 1.3 connection")
+                        client_sock.send(utils.generate_tls_alert(data))
+                        return
                 except Exception as e:
-                    logger.info(f"upstream : {repr(e)} from {backend_sock.domain if backend_sock else 'unknown'}")
+                    logger.warning(f"TLS version check failed: {e}")
+
+            # 启动下游处理
+            thread_pool.submit(self.downstream, backend_sock, client_sock)
+
+            # 发送数据
+            mode = backend_sock.policy.get("mode")
+            if mode == "TLSfrag":
+                fragment.send_fraggmented_tls_data(backend_sock, data)
+            elif mode == "FAKEdesync":
+                fake_desync.send_data_with_fake(backend_sock, data)
+            elif mode == "DIRECT":
+                backend_sock.send(data)
+            elif mode == "GFWlike":
+                return
+
+            # 继续转发数据
+            while self.running:
+                data = client_sock.recv(16384)
+                if data:
+                    backend_sock.send(data)
+                else:
                     break
 
+        except Exception as e:
+            logger.info(f"upstream error: {repr(e)}")
         finally:
             try:
-                if client_sock:
-                    client_sock.close()
+                client_sock.close()
             except:
                 pass
             try:
@@ -357,46 +221,32 @@ class ThreadedServer(object):
             except:
                 pass
 
-    def my_downstream(self, backend_sock: remote.Remote, client_sock: socket.socket):
+    def downstream(self, backend_sock, client_sock):
         try:
-            global ThreadtoWork
-            while ThreadtoWork:
-                try:
-                    data = backend_sock.recv(16384)
-                    if data:
-                        client_sock.sendall(data)
-                    else:
-                        break
-                except (ConnectionResetError, ConnectionAbortedError, OSError) as e:
-                    if e.errno in (10038, 10053, 10054):
-                        logger.debug(f"Connection closed: {e}")
-                    else:
-                        logger.info(f"downstream : {repr(e)} from {backend_sock.domain}")
+            while self.running:
+                data = backend_sock.recv(16384)
+                if data:
+                    client_sock.sendall(data)
+                else:
                     break
-                except Exception as e:
-                    logger.info(f"downstream : {repr(e)} from {backend_sock.domain}")
-                    break
+        except Exception as e:
+            logger.info(f"downstream error: {repr(e)}")
         finally:
             try:
-                if client_sock:
-                    client_sock.close()
+                client_sock.close()
             except:
                 pass
             try:
-                if backend_sock:
-                    backend_sock.close()
+                backend_sock.close()
             except:
                 pass
-
-    def _is_proxy_domain(self, domain):
-        return False
 
     def extract_servername_and_port(self, data):
         host_and_port = str(data).split()[1]
         try:
             host, port = host_and_port.split(":")
         except:
-            if host_and_port.find("[") != -1:
+            if "[" in host_and_port:
                 host, port = host_and_port.split("]:")
                 host = host[1:]
             else:
@@ -408,29 +258,11 @@ class ThreadedServer(object):
         return (host, int(port))
 
 
-serverHandle = None
-
-
-def start_server(block=True):
-    load_direct_cache()
-    global serverHandle
+def start_server():
     logger.info(f"Now listening at: 127.0.0.1:{config['port']}")
-    serverHandle = ThreadedServer("", config["port"]).listen(block)
+    server = Server("", config["port"])
+    server.listen()
 
-
-def stop_server(wait_for_stop=True):
-    global ThreadtoWork, proxy_thread
-    ThreadtoWork = False
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect(("127.0.0.1", config["port"]))
-    sock.close()
-    if wait_for_stop:
-        while proxy_thread.is_alive():
-            pass
-        logger.info("Server stopped")
-
-
-ThreadtoWork = True
 
 if __name__ == "__main__":
     start_server()

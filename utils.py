@@ -134,6 +134,7 @@ def set_ttl(sock, ttl):
 
 
 def check_ttl(ip, port, ttl):
+    sock = None
     try:
         if ":" in ip:
             sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
@@ -143,13 +144,16 @@ def check_ttl(ip, port, ttl):
         sock.settimeout(0.5)
         sock.connect((ip, port))
         sock.send(b"0")
-        sock.close()
         return True
     except Exception as e:
-        logger.warning(f"check_ttl error: {repr(e)}")
+        logger.debug(f"check_ttl error for {ip}:{port} ttl={ttl}: {repr(e)}")
         return False
     finally:
-        sock.close()
+        if sock:
+            try:
+                sock.close()
+            except:
+                pass
 
 
 def get_ttl(ip, port):

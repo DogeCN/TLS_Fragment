@@ -128,6 +128,12 @@ with open("config.json", "rb") as f:
 
 config = merge_dict(_config, config)
 
+# 向后兼容处理
+if "doh_server" in config and "doh_servers" not in config:
+    config["doh_servers"] = [config["doh_server"]]
+elif "doh_servers" not in config:
+    config["doh_servers"] = ["https://v.recipes/dns-query?dns="]
+
 default_policy = config["default_policy"]
 default_policy["fake_packet"] = default_policy["fake_packet"].encode(encoding="UTF-8")
 
@@ -148,7 +154,6 @@ if default_policy["fake_ttl"] == "auto":
     # temp code for auto fake_ttl
     default_policy["fake_ttl"] = random.randint(10, 60)
 
-TTL_cache = {}  # TTL for each IP
 DNS_cache = {}  # DNS cache for each domain
 
 try:
@@ -157,18 +162,7 @@ try:
 except FileNotFoundError:
     pass
 
-try:
-    with open("TTL_cache.json", "rb") as f:
-        TTL_cache = json.load(f)
-except FileNotFoundError:
-    pass
-
 
 def write_DNS_cache():
     with open("DNS_cache.json", "w") as f:
         json.dump(DNS_cache, f)
-
-
-def write_TTL_cache():
-    with open("TTL_cache.json", "w") as f:
-        json.dump(TTL_cache, f)
