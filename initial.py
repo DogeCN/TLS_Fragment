@@ -113,6 +113,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     filemode="w",
+    encoding="utf-8",
     filename=config.get("logfile"),
 )
 
