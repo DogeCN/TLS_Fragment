@@ -6,10 +6,12 @@
     "my_socket_timeout": 120,
     "FAKE_ttl_auto_timeout": 5,
     "doh_servers": [
-        "https://v.recipes",
-        "https://cloudflare-dns.com",
-        "https://dns.google",
-        "https://1.1.1.1"
+        "https://v.recipes/dns-cn",
+        "https://1.1.1.1/dns-query",
+        "https://8.8.8.8/dns-query",
+        "https://9.9.9.9/dns-query",
+        "https://208.67.222.222/dns-query",
+        "https://114.114.115.119/dns-query"
     ],
     "DNS_cache_update_interval": 2,
     "UDPfakeDNS": true,

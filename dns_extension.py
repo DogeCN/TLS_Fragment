@@ -30,7 +30,7 @@ class DohServer(Server):
         wire = self._query(domain, type).to_wire()
         b64 = base64.urlsafe_b64encode(wire).decode().rstrip("=")
         resp = self.session.get(
-            self.url + "/dns-query?dns=" + b64,
+            self.url + "?dns=" + b64,
             params={"type": type, "ct": "application/dns-message"},
             headers={"accept": "application/dns-message"},
             proxies={"https": None},
