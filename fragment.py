@@ -1,5 +1,5 @@
 import random
-from log import logger
+from initial import logger
 import remote
 import time
 

@@ -1,52 +1,9 @@
 import ipaddress
 import socket
 import struct
-from log import logger
+from initial import logger
 
 logger = logger.getChild("utils")
-
-
-def expand_pattern(s):
-    left_index, right_index = s.find("("), s.find(")")
-    if left_index == -1 and right_index == -1:
-        return s.split("|")
-    if -1 in (left_index, right_index):
-        raise ValueError("Both '(' and ')' must be present", s)
-    if left_index > right_index:
-        raise ValueError("'(' must occur before ')'", s)
-    if right_index == left_index + 1:
-        raise ValueError("A vaild string should exist between a pair of parentheses", s)
-    prefix = s[:left_index]
-    suffix = s[right_index + 1 :]
-    inner = s[left_index + 1 : right_index]
-    return [prefix + part + suffix for part in inner.split("|")]
-
-
-def ip_to_binary_prefix(ip_or_network: str):
-    try:
-        network = ipaddress.ip_network(ip_or_network, strict=False)
-        network_address = network.network_address
-        prefix_length = network.prefixlen
-        if isinstance(network_address, ipaddress.IPv4Address):
-            binary_network = bin(int(network_address))[2:].zfill(32)
-        elif isinstance(network_address, ipaddress.IPv6Address):
-            binary_network = bin(int(network_address))[2:].zfill(128)
-        binary_prefix = binary_network[:prefix_length]
-        return binary_prefix
-    except ValueError:
-        try:
-            ip = ipaddress.ip_address(ip_or_network)
-            if isinstance(ip, ipaddress.IPv4Address):
-                binary_ip = bin(int(ip))[2:].zfill(32)
-                binary_prefix = binary_ip[:32]
-            elif isinstance(ip, ipaddress.IPv6Address):
-                binary_ip = bin(int(ip))[2:].zfill(128)
-                binary_prefix = binary_ip[:128]
-            return binary_prefix
-        except ValueError:
-            raise ValueError(
-                f"input {ip_or_network} is not a valid IP or network address"
-            )
 
 
 def calc_redirect_ip(ip_str: str, mapper_str: str):
@@ -133,45 +90,10 @@ def set_ttl(sock, ttl):
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, ttl)
 
 
-def check_ttl(ip, port, ttl):
-    sock = None
-    try:
-        if ":" in ip:
-            sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-        else:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        set_ttl(sock, ttl)
-        sock.settimeout(0.5)
-        sock.connect((ip, port))
-        sock.send(b"0")
-        return True
-    except Exception as e:
-        logger.debug(f"check_ttl error for {ip}:{port} ttl={ttl}: {repr(e)}")
-        return False
-    finally:
-        if sock:
-            try:
-                sock.close()
-            except:
-                pass
-
-
 def get_ttl(ip, port):
-    l = 1
-    r = 32
-    ans = -1
-    while l <= r:
-        mid = (l + r) // 2
-        val = check_ttl(ip, port, mid)
-        logger.debug("%d %d %d %d %d", l, r, mid, ans, val)
-        if val:
-            ans = mid
-            r = mid - 1
-        else:
-            l = mid + 1
-
-    logger.info("get_ttl %s %d %d", ip, port, ans)
-    return ans
+    """TTL cache is disabled, return -1"""
+    logger.info("TTL cache disabled, returning -1 for %s:%d", ip, port)
+    return -1
 
 
 def extract_sni(data):

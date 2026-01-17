@@ -1,6 +1,6 @@
 import socket
 from utils import set_ttl, find_second_last_dot
-from log import logger
+from initial import logger
 import remote
 import time
 

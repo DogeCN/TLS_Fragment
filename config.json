@@ -6,12 +6,11 @@
     "my_socket_timeout": 120,
     "FAKE_ttl_auto_timeout": 5,
     "doh_servers": [
-        "https://v.recipes/dns-query?dns=",
-        "https://cloudflare-dns.com/dns-query?dns=",
-        "https://dns.google/dns-query?dns=",
-        "https://1.1.1.1/dns-query?dns="
+        "https://v.recipes",
+        "https://cloudflare-dns.com",
+        "https://dns.google",
+        "https://1.1.1.1"
     ],
-    "dns_optimization": true,
     "DNS_cache_update_interval": 2,
     "UDPfakeDNS": true,
     "BySNIfirst": false,
@@ -32,7 +31,6 @@
         "fake_sleep": 0.2,
         "DNS_cache": true,
         "DNS_cache_TTL": 259200,
-        "TTL_cache": true,
         "safety_check": true,
         "route": "4.dns.resolve"
     },

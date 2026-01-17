@@ -1,11 +1,7 @@
-from log import logger
+from initial import config, pool, logger, cache
 import remote, fake_desync, fragment, utils
 import socket, time
-from config import config
 from remote import match_domain
-from concurrent.futures import ThreadPoolExecutor
-
-thread_pool = ThreadPoolExecutor(max_workers=config.get("max_workers", 100))
 
 
 class Server:
@@ -26,7 +22,7 @@ class Server:
                 try:
                     client_sock, _ = self.sock.accept()
                     client_sock.settimeout(config["my_socket_timeout"])
-                    thread_pool.submit(self.upstream, client_sock)
+                    pool.submit(self.upstream, client_sock)
                 except OSError:
                     if self.running:
                         break
@@ -34,6 +30,7 @@ class Server:
             logger.warning("Server shutting down.")
         finally:
             self.running = False
+            cache.dump()
             self.sock.close()
 
     def handle_client_request(self, client_socket):
@@ -187,7 +184,7 @@ class Server:
                     logger.warning(f"TLS version check failed: {e}")
 
             # 启动下游处理
-            thread_pool.submit(self.downstream, backend_sock, client_sock)
+            pool.submit(self.downstream, backend_sock, client_sock)
 
             # 发送数据
             mode = backend_sock.policy.get("mode")
@@ -210,16 +207,6 @@ class Server:
 
         except Exception as e:
             logger.info(f"upstream error: {repr(e)}")
-        finally:
-            try:
-                client_sock.close()
-            except:
-                pass
-            try:
-                if backend_sock:
-                    backend_sock.close()
-            except:
-                pass
 
     def downstream(self, backend_sock, client_sock):
         try:
@@ -231,15 +218,6 @@ class Server:
                     break
         except Exception as e:
             logger.info(f"downstream error: {repr(e)}")
-        finally:
-            try:
-                client_sock.close()
-            except:
-                pass
-            try:
-                backend_sock.close()
-            except:
-                pass
 
     def extract_servername_and_port(self, data):
         host_and_port = str(data).split()[1]

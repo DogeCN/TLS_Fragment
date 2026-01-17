@@ -1,287 +1,181 @@
-from log import logger
-from config import (
+from typing import Dict, Tuple, Optional, Any
+from initial import (
     domain_map,
     config,
     default_policy,
     ipv4_map,
     ipv6_map,
-    DNS_cache,
-    write_DNS_cache,
+    cache,
     ip_to_binary_prefix,
+    pool,
+    logger,
 )
-
-from dns_extension import MyDoh
+from dns_extension import DnsResolver
 import socket
-import threading
 import time
 import copy
 import utils
 
 logger = logger.getChild("remote")
 
-resolver = MyDoh(
-    proxy=f"http://127.0.0.1:{config['DOH_port']}", urls=config["doh_servers"]
-)
-
-# DNS优选
-if config.get("dns_optimization", True):
-    resolver.optimize_servers()
-    
-    # 定期重新优选
-    def periodic_optimization():
-        import threading
-        def optimize_task():
-            while True:
-                time.sleep(300)  # 每5分钟重新优选一次
-                try:
-                    resolver.optimize_servers()
-                except Exception as e:
-                    logger.warning(f"DNS optimization failed: {e}")
-        
-        thread = threading.Thread(target=optimize_task, daemon=True)
-        thread.start()
-    
-    periodic_optimization()
-
-t = time.time()
-temp_DNS_cache = DNS_cache.copy()
-for domain, value in temp_DNS_cache.items():
-    if value["expires"] is not None and value["expires"] < t:
-        logger.info(f"DNS cache for {domain} expired and will be removed.")
-        DNS_cache.pop(domain)
-temp_DNS_cache.clear()
-
-write_DNS_cache()
-
-cnt_upd_DNS_cache = 0
-lock_DNS_cache = threading.Lock()
+resolver = DnsResolver(urls=config["doh_servers"])
 
 
-def match_ip(ip: str):
-    if ":" in ip:
-        return copy.deepcopy(ipv6_map.search(utils.ip_to_binary_prefix(ip)))
-    else:
-        return copy.deepcopy(ipv4_map.search(utils.ip_to_binary_prefix(ip)))
+def match_ip(ip: str) -> Dict[str, Any]:
+    map_obj = ipv6_map if ":" in ip else ipv4_map
+    return copy.deepcopy(map_obj.search(ip_to_binary_prefix(ip)))
 
 
-def match_domain(domain: str):
-    matched_domains = domain_map.search("^" + domain + "$")
-    if matched_domains:
-        return copy.deepcopy(
-            config["domains"].get(sorted(matched_domains, key=len, reverse=True)[0])
-        )
-    else:
-        return {}
+def match_domain(domain: str) -> Dict[str, Any]:
+    matches = domain_map.search("^" + domain + "$")
+    if matches:
+        longest_match = sorted(matches, key=len, reverse=True)[0]
+        return copy.deepcopy(config["domains"].get(longest_match, {}))
+    return {}
 
 
-def get_policy(address: str) -> dict:
-    if utils.is_ip_address(address):
-        return match_ip(address)
-    else:
-        return match_domain(address)
+def get_policy(address: str) -> Dict[str, Any]:
+    return match_ip(address) if utils.is_ip_address(address) else match_domain(address)
 
 
-def route(address: str, policy: dict, tmp_DNS_cache: dict = {}) -> {str, dict}:
-    policy = {**policy, **get_policy(address)}
-    # print(policy)
-    """
-    理清逻辑
-    rawaddress是当前地址，address是用来计算的，preaddress表示有没有^，policy["route"]是目前的重定向配置（^只会）
-    addresss是不会带^的
-    如果是域名要进行dns查询，就进行查询到cname，继承^，使其最终不重定向，递归
-    如果不是，此时^意味着仍需要计算
-    """
-    # print(address,policy)
-    redirectm = policy.get("route")
-    if redirectm[0] == "^":
+def route(
+    address: str, policy: Dict[str, Any], tmp_cache: Optional[Dict] = None
+) -> Tuple[str, Dict[str, Any]]:
+    if tmp_cache is None:
+        tmp_cache = {}
+
+    policy.update(get_policy(address))
+    redirect = policy.get("route")
+
+    if redirect.startswith("^"):
         stopchain = True
-        redirectm = redirectm[1:]
+        redirect = redirect[1:]
     else:
         stopchain = False
-    if not utils.is_ip_address(address) and redirectm == address:
+
+    if not utils.is_ip_address(address) and redirect == address:
         policy["route"] = default_policy["route"]
-        return route(address, policy, tmp_DNS_cache)
+        return route(address, policy, tmp_cache)
 
-    if not utils.is_ip_address(address) and redirectm[1:] == ".dns.resolve":
-        """
-        示例dns返回
-        {
-            'cn.bing.com': {
-                'route': 'cn-bing-com.cn.a-0001.a-msedge.net', 'expires': 1763277777.35967
-            },
-            'cn-bing-com.cn.a-0001.a-msedge.net': {
-                'route': 'a-0001.a-msedge.net', 'expires': 1763274776.35967
-            },
-            'a-0001.a-msedge.net': {
-                'route': ['204.79.197.200', '13.107.21.200'], 'expires': 1763274237.35967
-            }
-        }
-        """
-        if DNS_cache.get(address) is not None:
-            ansaddress = DNS_cache[address]["route"]
-            logger.info("DNS cache for %s is %s", address, ansaddress)
-        elif tmp_DNS_cache.get(address) is not None:
-            ansaddress = tmp_DNS_cache[address]["route"]
-            logger.debug("CNAME DNS cache for %s is %s", address, ansaddress)
+    if not utils.is_ip_address(address) and redirect.endswith(".dns.resolve"):
+        # DNS resolution
+        if address in cache:
+            result = cache[address]["route"]
+        elif address in tmp_cache:
+            result = tmp_cache[address]["route"]
         else:
-            if redirectm == "6.dns.resolve":
-                try:
-                    tmp_DNS_cache = {
-                        **tmp_DNS_cache,
-                        **resolver.resolve(address, "AAAA"),
-                    }
-                    ansaddress = tmp_DNS_cache[address]["route"]
-                except:
-                    tmp_DNS_cache = {**tmp_DNS_cache, **resolver.resolve(address, "A")}
-                    ansaddress = tmp_DNS_cache[address]["route"]
-            else:
-                try:
-                    tmp_DNS_cache = {**tmp_DNS_cache, **resolver.resolve(address, "A")}
-                    ansaddress = tmp_DNS_cache[address]["route"]
-                except:
-                    tmp_DNS_cache = {
-                        **tmp_DNS_cache,
-                        **resolver.resolve(address, "AAAA"),
-                    }
-                    ansaddress = tmp_DNS_cache[address]["route"]
+            # Execute DNS query
+            query_type = "AAAA" if redirect == "6.dns.resolve" else "A"
+            try:
+                tmp_cache.update(resolver.resolve(address, query_type))
+                result = tmp_cache[address]["route"]
+            except:
+                # Fallback query
+                fallback_type = "A" if query_type == "AAAA" else "AAAA"
+                tmp_cache.update(resolver.resolve(address, fallback_type))
+                result = tmp_cache[address]["route"]
 
-            if ansaddress and policy["DNS_cache"]:
-                global cnt_upd_DNS_cache, lock_DNS_cache
-                lock_DNS_cache.acquire()
+            # Cache result
+            if result and policy.get("DNS_cache"):
                 if ttl := policy.get("DNS_cache_TTL"):
-                    tmp_DNS_cache[address]["expires"] = time.time() + ttl
-                DNS_cache[address] = tmp_DNS_cache[address]
-                cnt_upd_DNS_cache += 1
-                if cnt_upd_DNS_cache >= config["DNS_cache_update_interval"]:
-                    cnt_upd_DNS_cache = 0
-                    write_DNS_cache()
-                lock_DNS_cache.release()
-                logger.info(f"DNS cache {address} as {tmp_DNS_cache[address]}")
+                    tmp_cache[address]["expires"] = time.time() + ttl
+                cache[address] = tmp_cache[address]
 
-        if type(ansaddress) == list:
-            # 是list必然是ip
-            # 我们暂时取第一个，之后可能加入优选
-            ansaddress = ansaddress[0]
+        if isinstance(result, list):
+            result = result[0]
     else:
-        if utils.is_ip_address(address):
-            if redirectm[1:] == ".dns.resolve":
-                return address, policy
-        try:
-            ip_to_binary_prefix(redirectm)
-            ansaddress = utils.calc_redirect_ip(address, redirectm)
-        except:
-            ansaddress = redirectm
-        if stopchain:
-            return ansaddress, policy
+        if utils.is_ip_address(address) and redirect.endswith(".dns.resolve"):
+            return address, policy
 
-    if ansaddress == address:
+        try:
+            ip_to_binary_prefix(redirect)
+            result = utils.calc_redirect_ip(address, redirect)
+        except:
+            result = redirect
+
+        if stopchain:
+            return result, policy
+
+    if result == address:
         return address, policy
-    logger.info(f"route {address} to {ansaddress}")
-    return route(ansaddress, policy, tmp_DNS_cache)
+
+    logger.info(f"route {address} to {result}")
+    return route(result, policy, tmp_cache)
 
 
 class Remote:
-    policy: dict
-    domain: str
-    address: str
-    sock: socket.socket
-    port: int
-    protocl: int
-    # 6 tcp 17 udp
-
-    def __init__(self, domain: str, port=443, protocol=6):
+    def __init__(self, domain: str, port: int = 443, protocol: int = 6):
         self.domain = domain
         self.protocol = protocol
-
         self.policy = copy.deepcopy(default_policy)
         self.policy.setdefault("port", port)
-        self.address, self.policy = route(self.domain, self.policy)
-        # print(self.policy)
 
+        self.address, self.policy = route(self.domain, self.policy)
         self.port = self.policy["port"]
 
         logger.info("connect %s %d", self.address, self.port)
 
-        if self.policy["fake_ttl"][0] == "q" and self.policy["mode"] == "FAKEdesync":
-            logger.info(f"FAKE TTL for {self.address} is {self.policy.get('fake_ttl')}")
-            val = utils.get_ttl(self.address, self.policy.get("port"))
-            if val == -1:
-                logger.warning(f"Failed to get TTL for {self.address}, using default")
-                val = 10
-            logger.info("dist for %s is %d", self.address, val)
+        # TTL processing
+        if (
+            self.policy.get("fake_ttl", "").startswith("q")
+            and self.policy.get("mode") == "FAKEdesync"
+        ):
+            ttl = utils.get_ttl(self.address, self.port)
+            if ttl == -1:
+                ttl = 10
             self.policy["fake_ttl"] = utils.fake_ttl_mapping(
-                self.policy["fake_ttl"], val
+                self.policy["fake_ttl"], ttl
             )
-            logger.info("FAKE TTL for %s is %d", self.address, self.policy["fake_ttl"])
 
-        logger.info(f"{domain} --> {self.policy}")
+        # Create socket
+        family = socket.AF_INET6 if ":" in self.address else socket.AF_INET
+        sock_type = socket.SOCK_STREAM if protocol == 6 else socket.SOCK_DGRAM
+        self.sock = socket.socket(family, sock_type)
 
-        iptype = socket.AF_INET6 if ":" in self.address else socket.AF_INET
-
-        if self.protocol == 6:
-            socktype = socket.SOCK_STREAM
-            self.sock = socket.socket(iptype, socktype)
-        elif self.protocol == 17:
-            socktype = socket.SOCK_DGRAM
-            self.sock = socket.socket(iptype, socktype)
-        else:
-            raise ValueError("Unknown sock type", self.protocol)
-
-        if self.protocol == 6:
+        if protocol == 6:
             self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.settimeout(config["my_socket_timeout"])
 
-    def connect(self):
+    def connect(self) -> None:
         if self.protocol == 6:
             self.sock.connect((self.address, self.port))
-        elif self.protocol == 17:
-            pass
 
-    def send_with_oob(self, data, oob):
-        if self.protocol == 17:
-            self.sock.sendall(data)
-        elif self.protocol == 6:
+    def send_with_oob(self, data: bytes, oob: bytes) -> None:
+        if self.protocol == 6:
             self.sock.send(data + oob, socket.MSG_OOB)
-            # self.sock.sendall(data)
+        else:
+            self.sock.sendall(data)
 
-    def send(self, data):
+    def send(self, data: bytes) -> None:
         if self.protocol == 6:
             self.sock.sendall(data)
-        elif self.protocol == 17:
+        else:
+            # UDP processing
             data = data[3:]
             address, port, offset = utils.parse_socks5_address_from_data(data)
             data = data[offset:]
-            logger.info(f"send to {address}:{port}")
-            logger.debug(data)
-            if config["UDPfakeDNS"]:
+
+            if config["UDPfakeDNS"] and utils.is_udp_dns_query(data):
                 try:
-                    if utils.is_udp_dns_query(data):
-                        try:
-                            ans = utils.build_socks5_udp_ans(
-                                address, port, utils.fake_udp_dns_query(data)
-                            )
-                            logger.debug(ans)
-                            self.client_sock.sendall(ans)
-                            logger.info("UDP dns dealt")
-                            return
-                        except Exception as e:
-                            logger.warning("Error making up dns answer: " + repr(e))
-                except:
-                    pass
+                    response = utils.build_socks5_udp_ans(
+                        address, port, utils.fake_udp_dns_query(data)
+                    )
+                    self.client_sock.sendall(response)
+                    return
+                except Exception as e:
+                    logger.warning(f"UDP DNS fake failed: {e}")
+
             self.sock.sendto(data, (address, port))
 
-    def recv(self, size):
+    def recv(self, size: int) -> bytes:
         if self.protocol == 6:
             return self.sock.recv(size)
-        elif self.protocol == 17:
+        else:
             data, address = self.sock.recvfrom(size)
-            logger.info(f"receive from {address[0]}:{address[1]}")
-            ans = utils.build_socks5_udp_ans(address[0], int(address[1]), data)
-            logger.debug(ans)
-            return ans
+            return utils.build_socks5_udp_ans(address[0], address[1], data)
 
-    def close(self):
-        if self.protocol == 6:
+    def close(self) -> None:
+        try:
             self.sock.close()
-        elif self.protocol == 17:
+        except:
             pass
