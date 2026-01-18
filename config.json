@@ -1,9 +1,9 @@
 {
     "loglevel": "INFO",
     "logfile": "latest.log",
-    "port": 2500,
-    "DOH_port": 2500,
-    "my_socket_timeout": 120,
+    "port": 1080,
+    "DOH_port": 1080,
+    "my_socket_timeout": 30,
     "FAKE_ttl_auto_timeout": 5,
     "doh_servers": [
         "https://v.recipes/dns-cn",
@@ -16,7 +16,7 @@
     "UDPfakeDNS": true,
     "BySNIfirst": false,
     "TransmitFile_Limit": 2,
-    "max_workers": 100,
+    "max_workers": 8,
     "redirect_when_route": false,
     "default_policy": {
         "mode": "TLSfrag",

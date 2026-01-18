@@ -99,6 +99,8 @@ class DnsResolver:
                 result = future.result()
                 if result:
                     logger.info(f"DNS result: {result}")
+                    for f in futures:
+                        f.cancel()
                     return result
             except Exception as e:
                 logger.warning(f"DNS future failed: {e}")

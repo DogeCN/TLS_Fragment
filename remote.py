@@ -7,7 +7,6 @@ from initial import (
     ipv6_map,
     cache,
     ip_to_binary_prefix,
-    pool,
     logger,
 )
 from dns_extension import DnsResolver
@@ -104,10 +103,14 @@ def route(
 
 
 class Remote:
+    client: socket.socket
+    sni: bytes
+
     def __init__(self, domain: str, port: int = 443, protocol: int = 6):
         self.domain = domain
         self.protocol = protocol
-        self.policy = copy.deepcopy(default_policy)
+        self.connected = False
+        self.policy: dict = copy.deepcopy(default_policy)
         self.policy.setdefault("port", port)
 
         self.address, self.policy = route(self.domain, self.policy)
@@ -160,7 +163,7 @@ class Remote:
                     response = utils.build_socks5_udp_ans(
                         address, port, utils.fake_udp_dns_query(data)
                     )
-                    self.client_sock.sendall(response)
+                    self.client.sendall(response)
                     return
                 except Exception as e:
                     logger.warning(f"UDP DNS fake failed: {e}")

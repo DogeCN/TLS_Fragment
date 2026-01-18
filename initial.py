@@ -121,7 +121,7 @@ logger = logging.getLogger("tls_fragmenter")
 logger.setLevel(config["loglevel"])
 
 # 处理默认策略
-default_policy = config["default_policy"]
+default_policy: dict[str, str | bool | int] = config["default_policy"]
 default_policy["fake_packet"] = default_policy["fake_packet"].encode()
 
 if default_policy["fake_ttl"] == "auto":
