@@ -110,7 +110,7 @@ class Remote:
         self.domain = domain
         self.protocol = protocol
         self.connected = False
-        self.policy: dict = copy.deepcopy(default_policy)
+        self.policy: dict[str, str | bool | int] = copy.deepcopy(default_policy)
         self.policy.setdefault("port", port)
 
         self.address, self.policy = route(self.domain, self.policy)
